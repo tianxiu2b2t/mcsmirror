@@ -1,0 +1,18 @@
+{
+    "i18n.prompt.failed": " 未找到 i18n 字符串",
+    "main.success.start_service_done": "服务启动成功。耗时：${time} 秒。",
+    "main.success.service_exit": "已成功退出服务。",
+    "main.debug.service_unfinish": "在等待服务完成时出错。",
+    "scheduler.success.initialized": "调度器启动成功。",
+    "scheduler.success.shutdown": "调度器已成功关闭。",
+    "service.acme_zerossl.verify_dns": "验证 DNS 记录中，先等待 ${time} 秒后再验证",
+    "service.acme_zerossl.start_verify": "开始验证 DNS 记录",
+    "web.success.server.start_port.public": "服务启动成功。端口 [${port}]",
+    "web.success.server.start_port.ssl": "服务启动成功。端口 [${port}] 主域名 [${root_hostname}] [${subdomains}]",
+    "web.success.server.start_port.ssl.empty": "服务启动成功。端口 [${port}]（空 SSL）",
+    "service.acme_zerossl.finalize_success": "ACME 证书已成功签发，正在下载",
+    "service.acme_zerossl_v2.warning.certificate_will_validate": "证书 [${subdomains}] 将在 [${expires}] 过期，开始续签",
+    "service.acme_zerossl_v2.info.certificate_expires": "证书 [${subdomains}] 剩余有效期 [${expires}]",
+    "web.warning.request.invalid": "无效的请求 [${address}]",
+    "web.warning.request.no_application": "请求 [${host}] 无效 [${address}]"
+}
