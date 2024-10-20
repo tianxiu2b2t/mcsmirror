@@ -80,7 +80,7 @@ async def request(
     )
 
 async def get_projects(session: aiohttp.ClientSession) -> list[str]:
-    return (await request(session, "projects"))['projects']
+    return []#(await request(session, "projects"))['projects']
 
 async def get_project_version(session: aiohttp.ClientSession, project: str) -> str:
     return (await request(session, f"projects/{project}"))['versions'][-1]

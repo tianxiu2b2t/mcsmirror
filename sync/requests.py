@@ -86,8 +86,8 @@ class GithubRelease:
                 logger.debug(f"Github: {self.base_url}/{path}")
                 data = await resp.json()
                 #logger.debug(data)
-                with open("test.json", "w") as f:
-                    json.dump(data, f, indent=4)
+                #with open("test.json", "w") as f:
+                #    json.dump(data, f, indent=4)
                 return data
             
     async def get_releases(self):
