@@ -8,7 +8,7 @@ import const
 import env
 from logger import logger
 from sync.types import VersionBuildInfo
-
+import urllib.parse as urlparse
 
 async def request(
     baseurl: str,
@@ -136,3 +136,25 @@ class GithubRelease:
                 )
             )
         return results
+    
+
+class Jenkins:
+    def __init__(self, endpoint: str):
+        self.endpoint = endpoint + "/"
+        print(endpoint)
+
+    async def request(self, path: str, params: dict[str, Any] = {}):
+        async with aiohttp.ClientSession(
+            headers=GITHUB_HEADERS
+        ) as session:
+            async with session.get(urlparse.urljoin(self.endpoint, path), params=params) as resp:
+                logger.debug(f"Jenkins: {resp.request_info.real_url}")
+                data = await resp.json()
+                #logger.debug(data)
+                #with open("test.json", "w") as f:
+                #    json.dump(data, f, indent=4)
+                return data
+    
+    async def get_jobs(self):
+        resp = await self.request("api/json?tree=[name,url]")
+        print(resp)
