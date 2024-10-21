@@ -1,32 +1,28 @@
-__CORES__ = [
-    "Arclight",
-    "Lightfall",
-    "LightfallClient"
-]
+from sync.types import GithubSource
 
-import asyncio
-from sync.requests import GithubRelease
-from sync.types import VersionBuildInfo
 
-async def get_version_build_infos() -> set[VersionBuildInfo]:
-    return set().union(*(await asyncio.gather(
-        GithubRelease("IzzelAliz", "Arclight").get_version_build_infos(
+async def init():
+    return [
+        GithubSource(
+            "Arclight",
+            "IzzelAliz",
             "Arclight",
             lambda x: x.tag_name.split('/')[0],
             lambda x: x.tag_name.split('/')[1],
             filter=lambda x: '/' in x.tag_name
         ),
-        GithubRelease("ArclightPowered", "lightfall").get_version_build_infos(
+        GithubSource(
             "Lightfall",
+            "ArclightPowered",
+            "lightfall",
             lambda x: x.tag_name.split('-')[0],
             lambda x: x.tag_name.split('-')[1],
         ),
-        GithubRelease("ArclightPowered", "lightfall-client").get_version_build_infos(
+        GithubSource(
             "LightfallClient",
+            "ArclightPowered",
+            "lightfall-client",
             lambda x: x.tag_name.split('-')[0],
             lambda x: x.tag_name.split('-')[1],
-        ),
-    )))
-
-async def init():
-    ...
+        )
+    ]

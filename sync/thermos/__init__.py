@@ -1,19 +1,12 @@
-__CORES__ = [
-    'Thermos'
-]
-
-from sync.requests import GithubRelease
-from sync.types import VersionBuildInfo
+from sync.types import GithubSource
 
 
-async def get_version_build_infos() -> set[VersionBuildInfo]:
-    github = GithubRelease("CyberdyneCC", "Thermos")
-    return await GithubRelease("CyberdyneCC", "Thermos").get_version_build_infos(
+async def init():
+    return GithubSource(
+        "Thermos",
+        "CyberdyneCC", 
         "Thermos",
         lambda x: "1.7.10",
         lambda x: x.tag_name,
         lambda x: x.name.endswith("stable.jar")
     )
-
-async def init():
-    ...

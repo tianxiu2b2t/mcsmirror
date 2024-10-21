@@ -1,81 +1,18 @@
 from dataclasses import dataclass
 from datetime import datetime
-import json
 from typing import Any, Callable, Optional
 import aiohttp
 
 import const
 import env
 from logger import logger
-from sync.types import VersionBuildInfo
 import urllib.parse as urlparse
 
-async def request(
-    baseurl: str,
-    path: str,
-    params: dict = {},
-    headers: dict = {},
-    session: Optional[aiohttp.ClientSession] = None
-) -> dict:
-    local_session = session
-    if local_session is None:
-        local_session = aiohttp.ClientSession(
-            baseurl,
-            headers={
-                "User-Agent": const.const.user_agent
-            } | headers
-        )
-    try:
-        return await _request(local_session, path, params)
-    except:
-        raise
-    finally:
-        if session is None:
-            await local_session.close()
-        
-async def _request(
-    session: aiohttp.ClientSession,
-    path: str,
-    params: dict = {},
-):
-    async with session.get(
-        path,
-        params=params
-    ) as resp:
-        data = await resp.json()
-        return data
-    
-
-
-GITHUB_TOKEN = env.get_env("GITHUB_TOKEN")
-GITHUB_BASEURL = "https://api.github.com/"
-GITHUB_HEADERS: dict[str, str] = {
-    "User-Agent": const.const.user_agent
-}
-if GITHUB_TOKEN:
-    GITHUB_HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
-
-GITHUB_PER_PAGE = 100
-
-@dataclass
-class Release:
-    tag_name: str
-    target_commitish: str
-    name: str
-    time: datetime
-    assets: list['ReleaseAsset']
-
-@dataclass
-class ReleaseAsset:
-    name: str
-    size: int
-    time: datetime
-    url: str
+from sync.types import GithubVersionBuildInfo, Release, ReleaseAsset
 
 class GithubRelease:
     def __init__(self, owner: str, repo: str):
         self.base_url = f"/repos/{owner}/{repo}"
-
 
     async def request(self, path: str, params: dict[str, Any] = {}):
         async with aiohttp.ClientSession(
@@ -118,30 +55,29 @@ class GithubRelease:
             )
         return list(filter(lambda x: x.assets, results))
     
-    async def get_version_build_infos(self, core: str, mc_version_handler: Callable[[Release], str], build_handler: Callable[[Release], str], name_handler: Callable[[ReleaseAsset], bool] = lambda x: True, filter: Callable[[Release], bool] = lambda x: True) -> set[VersionBuildInfo]:
-        results: set[VersionBuildInfo] = set()
+    async def get_version_build_infos(self, core: str, version_handler: Callable[[Release], str], build_handler: Callable[[Release], str], name_handler: Callable[[ReleaseAsset], bool] = lambda x: True, filter: Callable[[Release], bool] = lambda x: True) -> list[GithubVersionBuildInfo]:
+        results: list[GithubVersionBuildInfo] = []
         for release in await self.get_releases():
             if not filter(release):
                 continue
-            mc_version = mc_version_handler(release)
+            version = version_handler(release)
             build = build_handler(release)
             asset = max(release.assets, key=lambda x: x.time)
-            results.add(
-                VersionBuildInfo(
+            results.append(
+                GithubVersionBuildInfo(
                     core,
                     build,
-                    mc_version,
+                    version,
                     asset.url,
-                    asset.name
+                    asset.name,
+                    release
                 )
             )
         return results
-    
 
 class Jenkins:
     def __init__(self, endpoint: str):
         self.endpoint = endpoint + "/"
-        print(endpoint)
 
     async def request(self, path: str, params: dict[str, Any] = {}):
         async with aiohttp.ClientSession(
@@ -158,3 +94,65 @@ class Jenkins:
     async def get_jobs(self):
         resp = await self.request("api/json?tree=[name,url]")
         print(resp)
+
+class aiohttpClientSessionManager:
+    def __init__(self):
+        self.default_session: aiohttp.ClientSession = aiohttp.ClientSession(
+            headers={
+                "User-Agent": const.const.user_agent
+            }
+        )
+        self.current_session: Optional[aiohttp.ClientSession] = None
+
+    async def __aclose__(self):
+        await self.default_session.close()
+
+    def get_session(self) -> aiohttp.ClientSession:
+        return self.current_session or self.default_session
+    
+    def set_session(self, session: aiohttp.ClientSession):
+        self.current_session = session
+    
+    def clear_session(self):
+        self.current_session = None
+
+GITHUB_TOKEN = env.get_env("GITHUB_TOKEN")
+GITHUB_BASEURL = "https://api.github.com/"
+GITHUB_HEADERS: dict[str, str] = {
+    "User-Agent": const.const.user_agent
+}
+if GITHUB_TOKEN:
+    GITHUB_HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+
+GITHUB_PER_PAGE = 100
+REQUEST_CACHE_TIMEOUT = 3600
+
+session_manager = aiohttpClientSessionManager()
+
+async def request(
+    baseurl: str,
+    path: str,
+    params: dict = {},
+    headers: dict = {},
+    session: Optional[aiohttp.ClientSession] = None
+) -> dict:
+    session = session or session_manager.get_session()
+    path = urlparse.urljoin(baseurl, path)
+    try:
+        return await _request(session, path, params, headers)
+    except:
+        raise
+        
+async def _request(
+    session: aiohttp.ClientSession,
+    path: str,
+    params: dict = {},
+    headers: dict = {}
+):
+    async with session.get(
+        path,
+        params=params,
+        headers=headers
+    ) as resp:
+        data = await resp.json()
+        return data
