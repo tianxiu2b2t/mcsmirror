@@ -8,7 +8,6 @@ import utils
 import atexit
 import scheduler
 import mcservermirror
-import sync
 
 _WAITLOCK = utils.CountLock()
 _START_RUNTIME = time.monotonic()
@@ -35,7 +34,7 @@ async def main():
         load(module) for module in [
             scheduler,
             service,
-            sync
+            mcservermirror
         ]
     ])
     _WAITLOCK.acquire()

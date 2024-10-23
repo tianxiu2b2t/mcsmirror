@@ -321,7 +321,7 @@ class ZerosslInstance:
         eab_signature = base64.urlsafe_b64encode(
             hmac.new(keyhex, eab_sign_t.encode('utf-8'), hashlib.sha256).digest()
         ).decode('utf-8').replace('=', '')
-        regjson = self.base64_url_replace(json.dumps({
+        regjson = {
             "contact": [f"mailto:{self.email}"],
             "termsOfServiceAgreed": True,
             "externalAccountBinding": {
@@ -329,10 +329,7 @@ class ZerosslInstance:
                 "payload": eab_payload,
                 "signature": eab_signature
             }
-        }))
-        protected = await self.signature_data_body(ACTION.newAccount, {
-            "jwk": self.jwt
-        }, regjson)
+        }
         resp = await self.request(
             ACTION.newAccount,
             regjson,
@@ -377,7 +374,7 @@ class ZerosslInstance:
             ) as resp:
                 self._share_nonce = resp.headers.get("Replay-Nonce")
                 data = await resp.json()
-                if resp.status // 1 == 4:
+                if resp.status // 1 == 4 or "problem" in resp.content_type:
                     logger.error(f"ACME Error: {data['type']} {data['status']}, detail: {data['detail']}, request data: {raw_data}")
                 return ACMEResponse(
                     resp.headers,
