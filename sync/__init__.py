@@ -27,6 +27,9 @@ class Source:
     def init(self) -> Callable:
         return self._init
     
+    def __hash__(self) -> int:
+        return hash(self.package)
+    
 
 sync_sources: list[CoreSource] = []
 sources: list[Source] = []
@@ -80,10 +83,18 @@ async def init():
         logger.success(f'Loaded Package [{module.package}]')
         sources.append(module)
 
-    core_source: CoreSource
-    for core_source in set().union(*await asyncio.gather(*[load(source) for source in sources])):
-        logger.success(f'Loaded Core Source [{core_source.core}]')
-        sync_sources.append(core_source)
+    core_sources: dict[Source, list[CoreSource]] = {
+        module: result
+        for module, result in zip(
+            sources,
+            await asyncio.gather(*[load(module) for module in sources])
+        )
+    }
+
+    for module, csources in core_sources.items():
+        for source in csources:
+            sync_sources.append(source)
+            logger.success(f'Loaded Source [{source.core}] [{module}]')
 
     await asyncio.create_task(sync())
 
@@ -117,13 +128,13 @@ async def sync_from_source(sync_source: CoreSource):
     }
     if sync_source_build_infos:
         logger.success(f'Synced {len(sync_source_build_infos)} builds from {sync_source.core}')
-    #for core_version_build_info in sync_source_build_infos.values():
-    #    print(f'[{core_version_build_info.core.core} {core_version_build_info.version.version} {core_version_build_info.build.build} {core_version_build_info.date}]:')
-
+    return sync_source_build_infos
 async def sync():
-    await asyncio.gather(*(
+    results = await asyncio.gather(*(
         sync_from_source(source) for source in sync_sources
     ))
+    logger.success("Synced all sources")
+    logger.success(f'Synced {sum(len(result) for result in results)} builds')
         #for asset in core_version_build_info.assets:
         #    print(f'  {asset.name}: {asset.url}')
     #version_infos: set[VersionBuildInfo] = await get_version_build_infos()

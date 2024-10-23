@@ -3,9 +3,9 @@ from sync.types import GithubSource
 
 async def init():
     return GithubSource(
-        "Leaves",
-        "LeavesMC", 
-        "Leaves",
+        "Luminol",
+        "LuminolMC", 
+        "Luminol",
         lambda x: x.tag_name.split("-")[0],
         lambda x: x.tag_name.split("-")[1],
     )
