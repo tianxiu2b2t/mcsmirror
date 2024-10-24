@@ -1,6 +1,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import hashlib
 from typing import Any, Optional
 
 import aiohttp
@@ -13,6 +14,7 @@ from lxml import html
 class Response:
     version: str
     date: datetime
+    build: str
     link: str
 
 @dataclass
@@ -46,10 +48,12 @@ class Source(CoreSource):
                 version = pane.xpath(".//h2/text()")[0]
                 date = datetime.strptime(pane.xpath(".//h3/text()")[1], "%A, %B %d %Y")
                 link = pane.xpath('.//a[@class="btn btn-download"]/@href')[0]
+                build = hashlib.sha1(link.encode()).hexdigest()
                 results.append(
                     Response(
                         version,
                         date,
+                        build,
                         link
                     )
                 )
@@ -64,8 +68,11 @@ class Source(CoreSource):
         ]
     
     async def get_builds(self, version: str) -> list[str]:
+        resp = await self.fetch()
         return [
-            "latest"
+            item.build
+            for item in resp
+            if item.version == version
         ]
     
     async def get_build_info(self, info: CoreVersionBuild) -> Optional[CoreVersionBuildInfo]:

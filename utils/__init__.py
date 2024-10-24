@@ -278,3 +278,49 @@ def retry(max_retries=3, delay=1):
             raise Exception(f"Function {func.__name__} failed after {max_retries} retries.")
         return wrapper_retry
     return decorator
+
+
+@dataclass
+class ServiceData:
+    causedBy: str
+    httpCode: Optional[int] = None
+    data: Optional[Any] = None
+    cause: Optional[Exception] = None
+
+class ServiceException(Exception):
+    def __init__(
+        self,
+        code: int,
+        httpCode: int = 500,
+        data: Optional[ServiceData] = None,
+        name: str = "ServiceError",
+        isServiceError: bool = True
+    ):
+        super().__init__(
+            f"cause: {data.causedBy}" if data is not None else self.__class__.__name__
+        )
+        self.cause = self 
+        self.code = code
+        self.data = data
+        self.httpCode = httpCode
+        self.name = name
+        self.isServiceError = isServiceError
+        if data is not None:
+            self.httpCode = self.httpCode or data.httpCode
+            self.cause = self.cause or data.cause
+
+    @property
+    def message(self):
+        return str(self.cause)
+
+    
+    def to_json(self): 
+        return {
+            "$isServiceError": self.isServiceError,
+            "code": self.code,
+            "message": self.message,
+            "name": self.name.upper(),
+            "data": self.data,
+            "httpCode": self.httpCode,
+            "cause": str(self.cause)
+        }
