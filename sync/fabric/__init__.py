@@ -6,6 +6,8 @@ from sync.types import BuildAsset, CoreSource, CoreVersionBuild, CoreVersionBuil
 from sync import requests
 
 
+INSTALLER = (0, 8)
+
 @dataclass
 class Cache[T]:
     data: T
@@ -41,7 +43,7 @@ class Source(CoreSource):
         if cache.expired:
             resp = await self.fetch()
             loaders = [item["version"] for item in resp["loader"]]
-            installers = [item["version"] for item in resp["installer"]]
+            installers = [item["version"] for item in resp["installer"] if is_version_greater_or_equal(item["version"])]
             cache.data = [
                 f"{loader}-{installer}"
                 for loader, installer in zip(loaders, installers)
@@ -71,6 +73,16 @@ PATH = "/v2"
 async def init():
     return Source()
 
+def is_version_greater_or_equal(version_str):
+    version_tuple = tuple(map(int, version_str.split('.')))
+    target_version = INSTALLER
+    min_length = min(len(version_tuple), len(target_version))
+    for i in range(min_length):
+        if version_tuple[i] > target_version[i]:
+            return True
+        elif version_tuple[i] < target_version[i]:
+            return False
+    return len(version_tuple) >= len(target_version)
 
 def get_path(path: str):
     return f"{PATH}{path}"

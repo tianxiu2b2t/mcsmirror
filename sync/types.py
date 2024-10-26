@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Optional
 
+import bson
+
 class CoreSource(metaclass=abc.ABCMeta):
     def __init__(self, core: str) -> None:
         self.core = core
@@ -158,6 +160,39 @@ class ReleaseAsset:
         return hash((self.name, self.size, self.time, self.url))
 
 @dataclass
+class FileInfo:
+    _id: bson.ObjectId
+    core: str
+    version: str
+    build: str
+    name: str
+    url: str
+
+    def __hash__(self) -> int:
+        return hash((self.core, self.version, self.build, self.name, self.url))
+
+@dataclass
+class URLFileInfo:
+    _id: bson.ObjectId
+    core: str
+    version: str
+    build: str
+    name: str
+
+    def __hash__(self) -> int:
+        return hash((self._id, self.core, self.version, self.build, self.name))
+
+@dataclass
+class URLInfo:
+    url: str
+    files: set[URLFileInfo]
+    
+
+    def __hash__(self) -> int:
+        return hash(self.url)
+
+
+@dataclass
 class GithubVersionBuildInfo:
     core: str
     build: str
@@ -170,3 +205,11 @@ class GithubVersionBuildInfo:
         return hash((
             self.core, self.build, self.version, self.name, self.release
         ))
+    
+@dataclass
+class DownloadHistory:
+    url: str
+    status: int
+
+class DownloadStatusError(Exception):
+    ...

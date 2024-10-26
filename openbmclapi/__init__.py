@@ -80,6 +80,26 @@ class StorageFile:
     size: int
     path: str
         
+class WrapperTempFile:
+    def __init__(self, dir: Any):
+        self.tmp = tempfile.NamedTemporaryFile(
+            dir=dir,
+            suffix=utils.decimal_to_base36(time.monotonic_ns()) + "_" + utils.decimal_to_base36(time.perf_counter_ns()),
+            delete=False
+        )
+        self.path = Path(self.tmp.name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.tmp.close()
+        if self.path.exists():
+            self.path.unlink()
+
+    @property
+    def origin(self):
+        return self.tmp
 
 class Storage:
     def __init__(self):
@@ -94,8 +114,11 @@ class Storage:
 
     async def upload(self, path: str, reader: asyncio.StreamReader):
         hash = self.hash_type()
-        with tempfile.NamedTemporaryFile(dir=self.tmp, delete=False) as f:
-            tmp_path = Path(f.name)
+        with WrapperTempFile(
+            dir=self.tmp
+        ) as tmp:
+            tmp_path = tmp.path
+            f = tmp.origin
             length: int = 0
             while True:
                 chunk = await reader.read(UPLOAD_BUFFER)
@@ -117,8 +140,6 @@ class Storage:
                 "path": path
             })
             if q is not None:
-                if tmp_path.exists():
-                    tmp_path.unlink()
                 return StorageFile(
                     id=q["_id"],
                     hash=hash.hexdigest(),
@@ -1006,9 +1027,6 @@ class ClusterManager:
             partial
         )
 
-
-
-
     async def check_file(self, file: CheckFile, secret: str, session: aiohttp.ClientSession, ua: str):
         sign = get_sign(file.file_hash, secret)
         headers = {
@@ -1078,7 +1096,6 @@ class ClusterDownload:
             file.secret = cluster["secret"]
             file.endpoint = endpoint
         return file
-            
 
 @dataclass
 class ClusterSign:
@@ -1129,7 +1146,7 @@ class JWT:
         except:
             return False
 
-db = database.client.get_database("openbmclapi_v2")
+db = database.client.get_database("mcsmirror_openbmclapi")
 cluster_manager = ClusterManager()
 storage = Storage()
 CLUSTER_NAME_LIMIT = 16
