@@ -24,7 +24,7 @@ class Source(CoreSource):
             assets.append(
                 BuildAsset(
                     name=item["name"],
-                    url=f"{BASEURL}{PATH}/projects/{self.lower_core}/versions/{info.version.version}/builds/{info.build}/{item['name']}"
+                    url=f"{BASEURL}{PATH}/projects/{self.lower_core}/versions/{info.version.version}/builds/{info.build}/downloads/{item["name"]}"
                 )
             )
         return CoreVersionBuildInfo(

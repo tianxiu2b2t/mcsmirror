@@ -546,8 +546,8 @@ class Response:
             headers['Content-Type'] += '; charset=utf-8'
 
 class LocationResponse(Response):
-    def __init__(self, location: str, status: int = 302):
-        super().__init__(status=status)
+    def __init__(self, location: str, status: int = 302, headers: Optional['Header'] = None, cookies: list['Cookie'] = []):
+        super().__init__(status=status, headers=headers, cookies=cookies)
         self.headers['Location'] = location
 
 
@@ -654,8 +654,10 @@ class Request:
     body: bytes
     _peername: str
     form: Optional['Form'] = None
+    scheme: str = 'http'
 
     def __post_init__(self):
+        self.scheme = "https" if self.client.tls else "http"
         self._parse_path()
         self._current_length = 0
         if self.is_form:
