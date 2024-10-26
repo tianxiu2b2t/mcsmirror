@@ -16,13 +16,11 @@ import tempfile
 import time
 from typing import Any, Optional
 
-import aiofiles
 import aiohttp
 import bson
 import database
 import env
 from logger import logger
-import scheduler
 import service
 import units
 import utils
