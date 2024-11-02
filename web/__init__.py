@@ -13,3 +13,4 @@ from .common import (
 from .server import (
     start_server
 )
+from . import docs

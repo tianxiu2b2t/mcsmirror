@@ -282,45 +282,60 @@ def retry(max_retries=3, delay=1):
 
 @dataclass
 class ServiceData:
-    causedBy: str
+    causedBy: Exception
     httpCode: Optional[int] = None
-    data: Optional[Any] = None
-    cause: Optional[Exception] = None
+
+    @property
+    def causedByType(self):
+        return self.causedBy.__class__.__name__
 
 class ServiceException(Exception):
+    _isServiceError: bool = True
+    name: str = 'ServiceError'
+    httpCode: Optional[int] = None
+    causedBy: Optional[Exception] = None
     def __init__(
         self,
         code: int,
-        httpCode: int = 500,
+        message: str,
         data: Optional[ServiceData] = None,
-        name: str = "ServiceError",
-        isServiceError: bool = True
     ):
         super().__init__(
-            f"cause: {data.causedBy}" if data is not None else self.__class__.__name__
+            "".join((
+                message,
+                f"cause: {data.causedByType}" if data is not None else ""
+            ))
         )
-        self.cause = self 
+        self.message = message
         self.code = code
         self.data = data
-        self.httpCode = httpCode
-        self.name = name
-        self.isServiceError = isServiceError
-        if data is not None:
-            self.httpCode = self.httpCode or data.httpCode
-            self.cause = self.cause or data.cause
-
-    @property
-    def message(self):
-        return str(self.cause)
+        if data is None:
+            return
+        self.httpCode = data.httpCode
+        self.causedBy = data.causedBy
 
     
     def to_json(self): 
-        return {
-            "$isServiceError": self.isServiceError,
+        origin_data = None
+        if self.data is not None:
+            origin_data = {}
+            for k in (
+                "causedBy",
+                "httpCode"
+            ):
+                if hasattr(self.data, k) and getattr(self.data, k) is not None:
+                    origin_data[k] = getattr(self.data, k)
+                    if k == "causedBy":
+                        origin_data[k] = str(origin_data[k])
+        data = {
+            "$isServiceError": self._isServiceError,
             "code": self.code,
             "message": self.message,
-            "name": self.name.upper(),
-            "data": self.data,
+            "name": self.name,
+            "data": origin_data,
             "httpCode": self.httpCode,
-            "cause": str(self.cause)
+            "cause": str(self.causedBy or self)
+        }
+        return {
+            k: v for k, v in data.items() if v is not None
         }

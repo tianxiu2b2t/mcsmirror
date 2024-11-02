@@ -24,6 +24,7 @@ import scheduler
 import units
 import urllib.parse as urlparse
 from utils import decimal_to_base36
+import utils
 from web import filetype
 from web.compresstor import compress
 
@@ -256,7 +257,7 @@ class RequestTiming:
         return units.format_count_time(self.duration, round)
 
 class Application:
-    def __init__(self, root_hostname: str, subdomains: list[str], port: int) -> None:
+    def __init__(self, root_hostname: str, subdomains: list[str], port: int, ssl: bool = False) -> None:
         self.root_hostname = root_hostname
         self.subdomains = subdomains
         self.port = port
@@ -267,6 +268,8 @@ class Application:
         )
         self.before_middles: list[RouteFunction] = []
         self.after_middles: list[RouteFunction] = []
+        self.config = RouterConfiguration()
+        self.ssl = ssl
     
     def get_route(self, request: 'Request'):
         method = request.method
@@ -284,6 +287,10 @@ class Application:
             if match_route is not None:
                 return match_route
     
+    @property
+    def routers(self):
+        return self._routers
+
     def get_mount(self, path: str):
         for router in self._routers:
             match_route = router.get_mount(path)
@@ -293,16 +300,44 @@ class Application:
     async def handle(self, request: 'Request'):
         with RequestTiming() as timing:
             result = inspect._empty
-            match_route = self.get_route(request)
-            if match_route is not None:
-                result = await self.handle_route(request, match_route, timing)
-            if match_route is None or result is None:
-                match_route = True
-                result = self.get_mount(request.path)
-            if result == inspect._empty:
-                result = None
-            result = Response(result)
-            await result(request, timing)
+            config = self.config
+            try:
+                match_route = self.get_route(request)
+                if match_route is not None:
+                    config = config or match_route.config
+                    result = await self.handle_route(request, match_route, timing)
+                if match_route is None or result is None:
+                    match_route = True
+                    result = self.get_mount(request.path)
+                if result == inspect._empty:
+                    result = None
+                result = Response(result)
+            except Exception as e:
+                if config.auto_service_error:
+                    if isinstance(e, utils.ServiceException):
+                        result = Response(
+                            status=200,
+                            content=e.to_json()
+                        )
+                    else:
+                        result = Response(
+                            status=200,
+                            content=utils.ServiceException(
+                                500,
+                                "Internal Server Error",
+                                utils.ServiceData(
+                                    e,
+                                    500
+                                )
+                            ).to_json()
+                        )
+                else:
+                    result = Response(
+                        status=500,
+                        content="Internal Server Error"
+                    )
+                logger.traceback()
+            await result(request, timing, config)
 
     async def handle_route(self, request: 'Request', match_route: 'RouteResult', timing: RequestTiming):
         matched, route = match_route.matched, match_route.route
@@ -326,8 +361,6 @@ class Application:
                     parameters[name] = request.form
                 elif type == WebSocket and request.method == "GET":
                     parameters[name] = request.ws
-                    await request.ws.handshake()(request, timing)
-                    request.ws.start()
                 else:
                     if name in url_parameters:
                         parameters[name] = url_parameters[name]
@@ -346,36 +379,37 @@ class Application:
                     if name in parameters:
                         parameters[name] = fix_value(parameters[name], types)
         if request.is_websocket:
-            ...
+            await request.ws.handshake()(request, timing)
+            request.ws.start()
         if asyncio.iscoroutinefunction(handler):
             result = await handler(**parameters)
         else:
             result = await asyncio.get_event_loop().run_in_executor(None, lambda: handler(**parameters))
         return result
 
-    def get(self, path: str):
-        return self.add_route('GET', path)
+    def get(self, path: str, **kwargs):
+        return self._routers[0].get(path, **kwargs)
     
     def post(self, path: str):
-        return self.add_route('POST', path)
+        return self._routers[0].post(path)
 
     def head(self, path: str):
-        return self.add_route('HEAD', path)
+        return self._routers[0].head(path)
     
     def websocket(self, path: str):
-        return self.add_route('WEBSOCKET', path)
+        return self._routers[0].websocket(path)
     
     def patch(self, path: str):
-        return self.add_route('PATCH', path)
+        return self._routers[0].patch(path)
     
     def put(self, path: str):
-        return self.add_route('PUT', path)
+        return self._routers[0].put(path)
     
     def delete(self, path: str):
-        return self.add_route('DELETE', path)
+        return self._routers[0].delete(path)
 
     def options(self, path: str):
-        return self.add_route('OPTIONS', path)
+        return self._routers[0].options(path)
 
     def mount(self, url: str, path: Path):
         return self._routers[0].mount(url, path)
@@ -452,7 +486,7 @@ class Response:
             return await self.get_content()
         return self.content
     
-    async def __call__(self, request: 'Request', timing: RequestTiming):
+    async def __call__(self, request: 'Request', timing: RequestTiming, config: Optional['RouterConfiguration'] = None):
         content = await self.get_content()
         # if content instanceof Any, warning
         extra_headers = Header({})
@@ -462,7 +496,7 @@ class Response:
             length = stat.st_size
             if self.content_type is None or ("text/" not in self.content_type and "application/json" not in self.content_type):
                 extra_headers['Content-Disposition'] = f'attachment; filename="{content.name}"'
-            etag = f'"{hashlib.md5(f"{content.name};{stat.st_mtime_ns};{stat.st_ctime_ns};{stat.st_size}".encode()).hexdigest()}"'
+            etag = get_etag(content)
             if request.headers.get("If-None-Match", "") == etag and self.status == 200:
                 self.status = 304
                 content = memoryview(b'')
@@ -473,6 +507,9 @@ class Response:
             length = len(content)
         elif Any in type(content).__mro__:
             logger.debug(f'content is Any, {content}')
+
+        if config is not None and config.cros is not None:
+            extra_headers.update(config.cros.get_headers())
         
         # headers, to response headers
         headers = self.headers.copy()
@@ -511,6 +548,8 @@ class Response:
         if self.cookies:
             byte_header += '\r\n'.join([cookie.to_response_header() for cookie in self.cookies]) + '\r\n'
         request.client.write(byte_header.encode('utf-8'))
+        if request.method == 'HEAD':
+            return self
         if isinstance(content, memoryview):
             request.client.write(content)
             await request.client.drain()
@@ -549,7 +588,6 @@ class LocationResponse(Response):
     def __init__(self, location: str, status: int = 302, headers: Optional['Header'] = None, cookies: list['Cookie'] = []):
         super().__init__(status=status, headers=headers, cookies=cookies)
         self.headers['Location'] = location
-
 
 @dataclass
 class Cookie:
@@ -690,9 +728,10 @@ class Request:
             return start_bytes, end_bytes
         range = self.headers.get('Range').split('=')[1]
         if '-' in range:
-            start_bytes, end_bytes = map(int, range.split('-'))
+            start_bytes, end_bytes = map(lambda x: int(x) if x else None, range.split('-'))
         else:
             start_bytes = int(range)
+        start_bytes = 0 if start_bytes is None else start_bytes
         return start_bytes, end_bytes
     
     @property
@@ -750,7 +789,6 @@ class Request:
             data = await self.client.reader.read(size)
         self._current_length += len(data)
         return data
-
 
 class WebSocketOPCode(enum.Enum):
     TEXT = 1
@@ -855,8 +893,14 @@ class WebSocket:
         await self.send_text(json.dumps(data))
     
     async def close(self, status: int = 1000, reason: str = ""):
-        await self.raw_send(WebSocketOPCode.CLOSE, struct.pack("!H", status) + reason.encode('utf-8'))
-        await self.client.drain()
+        try:
+            if self.client.closed:
+                return
+            await self.raw_send(WebSocketOPCode.CLOSE, struct.pack("!H", status) + reason.encode('utf-8'))
+            await self.client.drain()
+        except:
+            ...
+        self.client.close()
 
     async def _read_frame(self):
         try:
@@ -931,7 +975,7 @@ class WebSocket:
             return frame
         self.frames[frame.opcode].append(frame)
         if len(self.frames[opcode]) >= 1:
-            return self.frames[opcode].popleft().data
+            return self.frames[opcode].popleft()
         return await self.read(opcode)
     
     async def read_text(self):
@@ -1026,12 +1070,15 @@ class Form:
             temp_file = None
         return Form(boundary, files, fields)
 
-
 @dataclass  
 class RouteHandlerArg:  
     name: str  
     type_annotation: list[Any]
     default: Any = inspect._empty 
+
+    @property
+    def required(self) -> bool:
+        return self.default is inspect._empty
   
 class RouteHandlerArgs:  
     def __init__(self, handler) -> None:  
@@ -1058,6 +1105,7 @@ class RouteHandlerArgs:
 class RouteFunction:
     path: str
     func: Callable
+    config: Optional['RouterConfiguration'] = None
 
     def __post_init__(self):
         self.parameters = RouteHandlerArgs(self.func)
@@ -1075,7 +1123,6 @@ class RouteFunction:
             path = path.replace("{:url:}", r"(?P<url>.*)")
         return path.replace("{", "(?P<").replace("}", ">[^/]*)")
             
-
     def __repr__(self) -> str:
         return f"RouteFunction(path={self.path}, func={self.func.__name__}, is_url_params={self.is_url_params}, re_path={self.re_path})"
 
@@ -1083,50 +1130,113 @@ class RouteFunction:
 class RouteResult:
     matched: re.Match
     route: RouteFunction
+    config: 'RouterConfiguration'
+
+class CROSConfiguration:
+    def __init__(self):
+        self._allow_credentials: bool = False
+        self._allow_methods: set[str] = set()
+        self._allow_headers: set[str] = set()
+        self._allow_origins: set[str] = set()
+        self._max_age: int = -1
+
+    def get_headers(self) -> Header:
+        data = {
+            "Access-Control-Allow-Credentials": str(self._allow_credentials).lower(),
+        }
+        for k, v in {
+            "Access-Control-Allow-Methods": self._allow_methods,
+            "Access-Control-Allow-Headers": self._allow_headers,
+            "Access-Control-Allow-Origin": self._allow_origins,
+            "Access-Control-Max-Age": self._max_age,
+        }.items():
+            if isinstance(v, set) and len(v) > 0:
+                if "*" in v:
+                    data[k] = "*"
+                else:
+                    data[k] = ", ".join(v)
+            elif isinstance(v, int):
+                if v == -1:
+                    continue
+                data[k] = str(v)
+        return Header(data)
+    
+    def add_method(self, *method: str):
+        for m in method:
+            self._allow_methods.add(m.upper())
+        return self
+
+    def add_header(self, *header: str):
+        for h in header:
+            self._allow_headers.add(h)
+        return self
+
+    def add_origin(self, *origin: str):
+        for o in origin:
+            self._allow_origins.add(o)
+        return self
+    
+    def set_max_age(self, max_age: int):
+        self._max_age = max_age
+        return self
+    
+    def set_credentials(self, allow_credentials: bool):
+        self._allow_credentials = allow_credentials
+        return self
+
+    def __repr__(self) -> str:
+        return f"CROSConfiguration(allow_credentials={self._allow_credentials}, allow_methods={self._allow_methods}, allow_headers={self._allow_headers}, allow_origins={self._allow_origins}, max_age={self._max_age})"
+
+@dataclass
+class RouterConfiguration:
+    auto_service_error: bool = False
+    cros: Optional[CROSConfiguration] = None
 
 class Router:
-    def __init__(self, prefix: str = "/"):
+    def __init__(self, prefix: str = "/", config: RouterConfiguration = RouterConfiguration()):
         self.prefix = prefix
         self.routes: defaultdict[str, list[RouteFunction]] = defaultdict(list)
-        self.mounts: defaultdict[str, Path] = defaultdict(Path)
+        self.mounts: defaultdict[str, list[Path]] = defaultdict(list)
+        self.config = config
 
-    def _route(self, method: str, path: str):
+    def _route(self, method: str, path: str, config: Optional['RouterConfiguration'] = None):
         def decorator(func: Callable):
             self.routes[method.upper()].append(RouteFunction(
                 path=path,
-                func=func
+                func=func,
+                config=config
             ))
             self.routes[method.upper()].sort(key=lambda x: len(x.path))
             self.routes[method.upper()].sort(key=lambda x: x.is_url_params)
             return func
         return decorator
     
-    def get(self, path: str):
-        return self._route("GET", path)
+    def get(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("GET", path, config)
 
-    def post(self, path: str):
-        return self._route("POST", path)
+    def post(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("POST", path, config)
     
-    def put(self, path: str):
-        return self._route("PUT", path)
+    def put(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("PUT", path, config)
     
-    def delete(self, path: str):
-        return self._route("DELETE", path)
+    def delete(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("DELETE", path, config)
     
-    def options(self, path: str):
-        return self._route("OPTIONS", path)
+    def options(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("OPTIONS", path, config)
     
-    def head(self, path: str):
-        return self._route("HEAD", path)
+    def head(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("HEAD", path, config)
     
-    def patch(self, path: str):
-        return self._route("PATCH", path)
+    def patch(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("PATCH", path, config)
     
-    def trace(self, path: str):
-        return self._route("TRACE", path)
+    def trace(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("TRACE", path, config)
     
-    def websocket(self, path: str):
-        return self._route("WEBSOCKET", path)
+    def websocket(self, path: str, config: Optional['RouterConfiguration'] = None):
+        return self._route("WEBSOCKET", path, config)
         
     def get_route(self, method: str, path: str) -> Optional[RouteResult]:
         if self.prefix and path.startswith(self.prefix):
@@ -1138,37 +1248,43 @@ class Router:
             if m is not None:
                 return RouteResult(
                     m,
-                    route
+                    route,
+                    route.config or self.config
                 )
         return None
     
     def mount(self, path: str, root: Path):
-        self.mounts[path] = root
+        self.mounts[path].append(root)
 
     def get_mount(self, path: str) -> Any:
         if self.prefix and path.startswith(self.prefix):
             path = path[len(self.prefix):]
             if not path.startswith("/"):
                 path = "/" + path
-        root = None
+        roots = None
         for mount_path, mount_root in sorted(self.mounts.items(), key=lambda x: len(x[0]), reverse=True):
             if path.startswith(mount_path):
-                root = mount_root
+                roots = mount_root
                 path = path[len(mount_path):].lstrip("/")
                 break
-        if root is None:
+        if roots is None:
             return Response(
                 status=404,
                 content="Not Found",
             )
-        file = root / path
-        if not str(file).startswith(str(root)):
+        forbidden = False
+        for root in roots:
+            file = root / path
+            if not str(file).startswith(str(root)):
+                forbidden = True
+                continue
+            if file.is_file():
+                return file
+        if forbidden:
             return Response(
                 status=403,
                 content="Forbidden",
             )
-        if file.is_file():
-            return file
         return Response(
             status=404,
             content="Not Found",
@@ -1252,3 +1368,7 @@ async def async_generator(sync_generator: Generator):
     for item in sync_generator:
         await asyncio.sleep(0)
         yield item
+
+def get_etag(path: Path):
+    stat = path.stat()
+    return f'"{hashlib.md5(f"{path.name};{stat.st_mtime_ns};{stat.st_ctime_ns};{stat.st_size}".encode()).hexdigest()}"'

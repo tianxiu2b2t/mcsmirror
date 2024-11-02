@@ -181,6 +181,15 @@ class URLFileInfo:
 
     def __hash__(self) -> int:
         return hash((self._id, self.core, self.version, self.build, self.name))
+    
+@dataclass
+class BuildInfo:
+    _id: bson.ObjectId
+    core: str
+    version: str
+    
+    def __hash__(self) -> int:
+        return hash((self._id, self.core, self.version))
 
 @dataclass
 class URLInfo:

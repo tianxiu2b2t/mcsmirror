@@ -4,12 +4,15 @@ from dataclasses import dataclass
 import importlib
 from pathlib import Path
 from types import ModuleType
-from typing import Callable
+from typing import Any, Callable
+
+from tqdm import tqdm
 
 import database
 import env
 from logger import logger
-from sync.types import CoreSource, CoreVersion, CoreVersionBuild, CoreVersionBuildInfo, FileInfo, URLFileInfo, URLInfo
+import openbmclapi
+from sync.types import BuildInfo, CoreSource, CoreVersion, CoreVersionBuild, CoreVersionBuildInfo, FileInfo, URLFileInfo, URLInfo
 from sync.database import (
     cores_collection
 )
@@ -37,6 +40,7 @@ class Source:
     
 sync_sources: list[CoreSource] = []
 sources: list[Source] = []
+auto_delete = "true" == env.get_env("SYNC_AUTO_DELETE_OLD_BUILD")
 
 def import_sources():
     results = []
@@ -133,7 +137,6 @@ async def get_sync_build_infos_from_source(builds: list[CoreVersionBuild]):
         ) if result is not None
     }
 
-
 async def sync_from_source(sync_source: CoreSource):
     versions = await get_sync_version_from_source(sync_source)
     builds: dict[CoreVersion, list[str]] = await get_sync_builds_from_source(versions)
@@ -180,7 +183,6 @@ async def sync_from_source(sync_source: CoreSource):
         } for build in sync_source_build_infos.values()
     ])
 
-
 async def get_no_files_builds():
     urls: defaultdict[str, set[URLFileInfo]] = defaultdict(set)
 
@@ -216,12 +218,95 @@ async def get_no_files_builds():
 
     return urls
 
+async def get_old_builds():
+    builds: defaultdict[tuple[str, str], list[tuple[str, list[dict[str, Any]]]]] = defaultdict(list)
+
+    async for i in cores_collection.aggregate([
+        { "$sort": { "build": 1 } },
+        {
+            "$group": {
+              "_id": { "core": "$core", "version": "$version" },
+              "documents": { "$push": "$$ROOT" }
+            }
+        },
+        { "$unwind": "$documents" },
+        { "$replaceRoot": { "newRoot": "$documents" } },
+    ]):
+        builds[(i["core"], i["version"])].append((
+            i["build"],
+            i["assets"]
+        ))
+
+    return [
+        {
+            "core": core,
+            "version": version,
+            "build": build,
+            "assets": assets
+        } for (core, version), builds in builds.items() for build, assets in builds[:int(env.get_env("SYNC_DOWNLOAD_BUILD")) or 1]
+    ]
+
+async def delete(core: str, version: str, build: str, assets: list[dict[str, Any]]):
+    paths: list[str] = [
+        f"/{core}/{version}/{build}/{asset['name']}"
+        for asset in assets
+    ]
+    await asyncio.gather(*[
+        openbmclapi.storage.delete(
+            path
+        )
+        for path in paths
+    ])
+    
+    set = {
+            "$set": {
+                "assets": [
+                    {
+                        k: v for k, v in asset.items() if k not in (
+                            "hash",
+                            "size",
+                            "mtime"
+                        )
+                    } for asset in assets
+                ]
+            }
+        }
+
+    await cores_collection.update_one(
+        {
+            "core": core,
+            "version": version,
+            "build": build,
+        },
+        set
+    )
+    
+
 async def sync():
     from .requests import downloader
     await asyncio.gather(*(
         sync_from_source(source) for source in sync_sources
     ))
     logger.success("Synced all sources")
+
+    if auto_delete:
+        old_builds = await get_old_builds()
+        logger.info(f"Get {len(old_builds)} old builds")
+        with tqdm(
+            total=len(old_builds),
+            desc="Deleting old builds",
+            unit="builds"
+        ) as pbar:
+            for build in old_builds:
+                await delete(
+                    build["core"],
+                    build["version"],
+                    build["build"],
+                    build["assets"]
+                )
+                pbar.update(1)
+        logger.success(f"Deleted {len(old_builds)} old builds")
+    # get old builds to delete
 
     logger.info("Get no downloaded files builds")
     no_files_builds = await get_no_files_builds()

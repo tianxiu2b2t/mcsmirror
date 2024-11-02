@@ -96,7 +96,7 @@ async def start_server(root_hostname: str, subdomains: list[str], port: int, ssl
     key = service.acme_zerossl_v2.get_subdomains_hash(subdomains)
     SUBDOMAINS_VALUES[tuple(subdomains)] = key
     if key not in APPLICATIONS:
-        APPLICATIONS[key] = common.Application(root_hostname, subdomains, port)
+        APPLICATIONS[key] = common.Application(root_hostname, subdomains, port, ssl)
     if ssl:
         scheduler.run_later(_start_ssl_server, 1, args=(root_hostname, subdomains))
     return APPLICATIONS[key]

@@ -61,6 +61,12 @@ class BuildInfo:
     size: Optional[int] = None
     mtime: Optional[datetime] = None
 
+@dataclass
+class FileInfo:
+    size: int
+    downloaded: int
+    total: int
+
 def pop_id(data: dict):
     if "_id" in data:
         data.pop("_id")
@@ -93,16 +99,7 @@ async def query(
     
     return cache.data
 
-async def init():
-    app = await web.start_server(
-        DOMAIN,
-        [
-            HOST
-        ],
-        7454,
-        True
-    )
-
+async def setup_v2(app: web.Application):
     apiv2 = web.Router(
         "/api/v2"
     )
@@ -110,7 +107,7 @@ async def init():
     @apiv2.get("/")
     async def _():
         if len(sync.sync_sources) == 0:
-            return utils.ServiceException(404, 404, name="NoSyncSourceError").to_json()
+            return utils.ServiceException(404, "NoSyncSourceError").to_json()
         return {
             "version": "2.0",
             "sources": len(sync.sync_sources),
@@ -126,7 +123,7 @@ async def init():
             cache.expire = time.monotonic() + CACHE_TIMEOUT
             q = await query(core=core)
             if len(q) == 0:
-                cache.data = utils.ServiceException(404, 404, name="NoCoreError").to_json()
+                cache.data = utils.ServiceException(404, "NoCoreError").to_json()
             else:
                 cache.data = {
                     "core": core,
@@ -147,7 +144,7 @@ async def init():
             cache.expire = time.monotonic() + CACHE_TIMEOUT
             q = await query(core=core, version=version)
             if len(q) == 0:
-                cache.data = utils.ServiceException(404, 404, name="NoVersionError").to_json()
+                cache.data = utils.ServiceException(404, "NoVersionError").to_json()
             else:
                 cache.data = {
                     "core": core,
@@ -168,7 +165,7 @@ async def init():
             cache.expire = time.monotonic() + CACHE_TIMEOUT
             q = await query(core=core, version=version, build=build)
             if len(q) == 0:
-                cache.data = utils.ServiceException(404, 404, name="NoBuildError").to_json()
+                cache.data = utils.ServiceException(404, "NoBuildError").to_json()
             else:
                 cache.data = {
                     "core": core,
@@ -189,7 +186,7 @@ async def init():
             cache.expire = time.monotonic() + CACHE_TIMEOUT
             q = await query(core=core, version=version, build=build)
             if len(q) == 0:
-                cache.data = utils.ServiceException(404, 404, name="NoBuildError").to_json()
+                cache.data = utils.ServiceException(404, "NoBuildError").to_json()
             else:
                 assets = [
                 ]
@@ -198,7 +195,7 @@ async def init():
                         if q_asset["name"] == asset:
                             assets.append(q_asset)
                 if len(assets) == 0:
-                    cache.data = utils.ServiceException(404, 404, name="NoAssetError").to_json()
+                    cache.data = utils.ServiceException(404, "NoAssetError").to_json()
                 else:
                     cache.data = {
                         "core": core,
@@ -210,9 +207,18 @@ async def init():
                     }
         return cache.data
 
+    app.add_router(apiv2)
+
+async def setup(app: web.Application):
     api = web.Router(
         "/api"
     )
+
+    @api.get("/")
+    async def _():
+        return {
+            "status": "ok"
+        }
 
     @api.get("/cores")
     async def _():
@@ -272,7 +278,7 @@ async def init():
                     cores_version[(item["core"], item["version"])].append(
                         CoreBuildInfo(
                             item["build"],
-                            f"{request.scheme}://{request.host}/download/{item["core"]}/{item["version"]}/{item["build"]}/{asset["name"]}",
+                            f"{request.scheme}://{request.host}/api/download/{item["core"]}/{item["version"]}/{item["build"]}/{asset["name"]}",
                             asset.get("mtime"),
                             originCheckSum
                         )
@@ -301,6 +307,7 @@ async def init():
     async def _(request: web.Request, core: str):
         cache = CACHE[f"resp_api_core_{core}_all"]
         if cache.expired:
+            cache.expire = time.monotonic() + CACHE_TIMEOUT
             try:
                 res: Response = await cores_all(request)
                 cores: list[CoreInfo] = res.data["cores"]
@@ -321,6 +328,7 @@ async def init():
     async def _(request: web.Request, core: str):
         cache = CACHE[f"resp_api_core_{core}"]
         if cache.expired:
+            cache.expire = time.monotonic() + CACHE_TIMEOUT
             try:
                 res: Response = await cores_all(request)
                 cores: list[CoreInfo] = res.data["cores"]
@@ -329,10 +337,10 @@ async def init():
                     raise
                 cache.data = Response(
                     {
-                        "versions": set(
+                        "versions": sorted(set(
                             version.name
                             for version in info.versions
-                        )
+                        ), reverse=True)
                     },
                 )
             except:
@@ -346,6 +354,7 @@ async def init():
     async def _(request: web.Request, core: str, version: str):
         cache = CACHE[f"resp_api_core_version_{core}_{version}"]
         if cache.expired:
+            cache.expire = time.monotonic() + CACHE_TIMEOUT
             try:
                 res: Response = await cores_all(request)
                 cores: list[CoreInfo] = res.data["cores"]
@@ -357,10 +366,10 @@ async def init():
                     raise
                 cache.data = Response(
                     {
-                        "builds": set(
+                        "builds": sorted(set(
                             build.name
                             for build in info.builds
-                        )
+                        ), reverse=True)
                     }
                 )
             except:
@@ -374,6 +383,7 @@ async def init():
     async def _(request: web.Request, core: str, version: str, build: str):
         cache = CACHE[f"resp_api_core_version_build_{core}_{version}_{build}"]
         if cache.expired:
+            cache.expire = time.monotonic() + CACHE_TIMEOUT
             try:
                 res: Response = await cores_all(request)
                 cores: list[CoreInfo] = res.data["cores"]
@@ -399,10 +409,11 @@ async def init():
         return cache.data
     
 
-    @app.get("/download/{core}/{version}/{build}/{name}")
+    @api.get("/download/{core}/{version}/{build}/{name}")
     async def _(request: web.Request, core: str, version: str, build: str, name: str):
         cache = CACHE[f"resp_api_download_{core}_{version}_{build}_{name}"]
         if cache.expired:
+            cache.expire = time.monotonic() + CACHE_TIMEOUT
             q = await query(
                 core,
                 version,
@@ -429,15 +440,16 @@ async def init():
                 return cache.data
             
             if info.hash is None:
-                return web.LocationResponse(
+                cache.data = web.LocationResponse(
                     info.url,
                     headers=web.common.Header({
                         "Content-Disposition": f"attachment; filename={urlparse.quote(info.name)}"
                     })
                 )
+                return cache.data
             link = await openbmclapi.downloads.get_download_link(f"/{core}/{version}/{build}/{name}")
             if link.valid:
-                return web.LocationResponse(
+                cache.data = web.LocationResponse(
                     link.url,
                     headers=web.common.Header({
                         "Content-Disposition": f"attachment; filename={urlparse.quote(info.name)}",
@@ -447,18 +459,50 @@ async def init():
                     })
                 )
             else:
-                return web.Response(
+                cache.data = web.Response(
                     openbmclapi.storage.get_hash_path(info.hash),
                     headers=web.common.Header({
+                        "Content-Disposition": f"attachment; filename={urlparse.quote(info.name)}",
                         "X-BMCLAPI-Hash": info.hash,
                         "X-BMCLAPI-Last-Modified": info.mtime,
                         "X-BMCLAPI-Size": info.size
                     })
                 )
-
         return cache.data
 
 
     app.add_router(api)
+
+async def init():
+    app = await web.start_server(
+        DOMAIN,
+        [
+            HOST
+        ],
+        7454,
+        True
+    )
+
+    @app.get("/")
+    async def _():
+        cache = CACHE["resp_info"]
+        if cache.expired:
+            cache.expire = time.monotonic() + CACHE_TIMEOUT
+            data = FileInfo(0, 0, 0)
+            async for i in sync.cores_collection.find({}):
+                for asset in i["assets"]:
+                    data.total += 1
+                    data.size += asset.get("size", 0)
+                    if "hash" in asset:
+                        data.downloaded += 1
+            cache.data = data
+
+            
+        return {
+            "version": "1.0",
+            "files": cache.data
+        }
+    
+    await setup(app)
 
     await sync.init()

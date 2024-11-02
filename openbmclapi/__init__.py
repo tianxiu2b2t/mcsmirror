@@ -223,6 +223,24 @@ class Storage:
     def get_hash_path(self, hash: str):
         return self.root / hash[:2] / hash
 
+    async def delete(self, path: str):
+        path = Storage.fix_path(path)
+        file_hash = await self.get_file(path)
+        file_hash = file_hash.hash if file_hash is not None else None
+        if file_hash is not None:
+            c = await self.files_collection.count_documents({
+                "hash": file_hash
+            })
+            print(path, c)
+            if c == 1:
+                file_path = self.get_hash_path(file_hash)
+                if file_path.exists():
+                    file_path.unlink()
+        await self.files_collection.delete_one({
+            "path": path
+        })
+        self.cache[path] = None
+
 @dataclass
 class DownloadLink:
     createdAt: float
@@ -1161,14 +1179,16 @@ ABORT_DOWN = 600
 WARDEN_INTERVAL_MIN = 60
 WARDEN_INTERVAL_MAX = 600
 WARDEN_COUNT = 5
+DOMAIN = env.get_env("DOMAIN")
+HOST = f"openbmclapi.{DOMAIN}"
 downloads = ClusterDownload()
 
 
 async def init():
     app = await web.start_server(
-        "ttb-network.top",
+        DOMAIN,
         [
-            "openbmclapi.ttb-network.top",
+            HOST
         ],
         9394,
         True
@@ -1178,20 +1198,9 @@ async def init():
     await cluster_manager.setup_socketio(app)
 
     cluster_manager.start()
-    
-
-    @app.get("/test/download/{:url:}")
-    async def _(url: str):
-        path = f"/{url}"
-        r = await downloads.get_download_link(path)
-        if not r.valid:
-            return web.Response(
-                status=404
-            )
-        return r.url
 
     @app.get("/backend/cluster/create")
-    async def _(name: str):
+    async def _(name: str, shared: Optional[int] = None):
         return await cluster_manager.create_cluster(name)
 
 def timestamp():
